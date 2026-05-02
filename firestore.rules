@@ -1,0 +1,88 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // --- Helpers ---
+    
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+    
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+    
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'duartesales@hotmail.com' && isEmailVerified()
+      );
+    }
+    
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+    
+    function incoming() {
+      return request.resource.data;
+    }
+    
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Validation Helpers ---
+
+    function isValidProduct(data) {
+      return data.keys().hasAll(['item', 'category', 'price', 'storeName', 'address', 'createdAt', 'userId'])
+          && data.keys().size() == 7
+          && data.item is string && data.item.size() > 0 && data.item.size() <= 100
+          && data.category in ['mercado', 'posto']
+          && data.price is number && data.price >= 0 && data.price < 1000000
+          && data.storeName is string && data.storeName.size() > 0 && data.storeName.size() <= 100
+          && data.address is string && data.address.size() <= 200
+          && data.createdAt == request.time
+          && data.userId == request.auth.uid;
+    }
+
+    function isValidStatsUpdate(data) {
+      return data.keys().hasAll(['searches', 'accesses', 'additions'])
+          && data.keys().size() == 3
+          && data.searches is int && data.searches >= 0
+          && data.accesses is int && data.accesses >= 0
+          && data.additions is int && data.additions >= 0;
+    }
+
+    // --- Global Deny ---
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Collections ---
+
+    match /products/{productId} {
+      allow read: if true; // Publicly readable
+      
+      allow create: if isSignedIn() 
+                    && isValidId(productId) 
+                    && isValidProduct(incoming());
+      
+      allow update: if false; // Prices are immutable for now, create new one if price changes
+      
+      allow delete: if isAdmin() || isOwner(existing().userId);
+    }
+
+    match /stats/global {
+      allow read: if true;
+      
+      // Allow creation if it doesn't exist, as long as it's a valid initial state
+      allow create: if isSignedIn() && isValidStatsUpdate(incoming());
+      
+      // Allow update if it's a valid stats object
+      allow update: if isSignedIn() && isValidStatsUpdate(incoming());
+    }
+  }
+}

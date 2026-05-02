@@ -1,0 +1,6 @@
+{
+  "name": "Menor Preço",
+  "description": "App para encontrar e compartilhar os menores preços de produtos em mercados e postos.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

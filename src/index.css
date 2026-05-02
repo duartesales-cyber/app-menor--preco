@@ -1,0 +1,26 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  
+  --color-brand-primary: #2ecc71;
+  --color-brand-dark: #27ae60;
+  --color-bg-dark: #0a0c10;
+  --color-bg-card: #161b22;
+  --color-border-dim: #30363d;
+  --color-text-main: #e0e6ed;
+  --color-text-muted: #64748b;
+}
+
+@layer base {
+  body {
+    @apply bg-bg-dark text-text-main;
+  }
+}
+
+.radial-dots {
+  background-image: radial-gradient(var(--color-brand-primary) 0.5px, transparent 0.5px);
+  background-size: 24px 24px;
+}

@@ -1,0 +1,39 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "A product entry with price and location",
+      "type": "object",
+      "properties": {
+        "item": { "type": "string" },
+        "category": { "type": "string", "enum": ["mercado", "posto"] },
+        "price": { "type": "number" },
+        "storeName": { "type": "string" },
+        "address": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "userId": { "type": "string" }
+      },
+      "required": ["item", "category", "price", "storeName", "address", "createdAt", "userId"]
+    },
+    "GlobalStats": {
+      "title": "Global Stats",
+      "description": "Application usage statistics",
+      "type": "object",
+      "properties": {
+        "searches": { "type": "integer" },
+        "accesses": { "type": "integer" },
+        "additions": { "type": "integer" }
+      }
+    }
+  },
+  "firestore": {
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Collection of all shared prices"
+    },
+    "/stats/global": {
+      "schema": "GlobalStats",
+      "description": "Single document for global counters"
+    }
+  }
+}
