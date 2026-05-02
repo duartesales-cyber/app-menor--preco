@@ -32,23 +32,22 @@ import {
   query, 
   orderBy,
   increment,
-  updateDoc
+  updateDoc,where
 } from 'firebase/firestore';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import { db, auth, signInWithGoogle } from './lib/firebase';
 import { handleFirestoreError, OperationType } from './lib/firestore-errors';
 
-// --- Types ---
-
+// --- Types ---.
 interface Product {
   id: string;
-  item: string;
+  nome: string;
+  preco: number;
   category: 'mercado' | 'posto';
-  price: number;
-  storeName: string;
-  address: string;
-  createdAt: any;
-  userId: string;
+  storeName?: string;
+  address?: string;
+  uid?: string;
+  createdAt?: any;
 }
 
 interface Stats {
@@ -81,9 +80,9 @@ export default function App() {
 
   // Products Listener
   useEffect(() => {
-    const q = query(collection(db, 'products'), orderBy('createdAt', 'desc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const docs = snapshot.docs.map(doc => ({ 
+const q = query(collection(db, 'produtos'), where('uid', '==', user?.uid));
+  const unsubscribe = onSnapshot(q, (snapshot) => {
+      const docs = snapshot.docs.map((doc) => ({
         id: doc.id, 
         ...doc.data() 
       } as Product));
@@ -116,12 +115,11 @@ export default function App() {
   const filteredProducts = useMemo(() => {
     return products
       .filter(p => {
-        const matchesSearch = p.item.toLowerCase().includes(search.toLowerCase()) || 
-                             p.storeName.toLowerCase().includes(search.toLowerCase());
+  const matchesSearch = p.nome.toLowerCase().includes(search.toLowerCase()) || 
+                             (p.storeName?.toLowerCase().includes(search.toLowerCase()) ?? false);
         const matchesFilter = filter === 'todos' || p.category === filter;
-        return matchesSearch && matchesFilter;
       })
-      .sort((a, b) => a.price - b.price);
+      .sort((a, b) => a.preco - b.preco);
   }, [products, search, filter]);
 
   const incrementStat = async (field: keyof Stats) => {
