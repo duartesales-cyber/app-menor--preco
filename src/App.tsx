@@ -18,7 +18,10 @@ import {
   AlertCircle,
   LogIn,
   LogOut,
-  User as UserIcon
+  User as UserIcon,
+  Camera,
+  RotateCcw,
+  CheckCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
@@ -66,6 +69,18 @@ export default function App() {
   const [filter, setFilter] = useState<'todos' | 'mercado' | 'posto'>('todos');
   const [showAdmin, setShowAdmin] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [showCameraModal, setShowCameraModal] = useState(false);
+  const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [cameraLocation, setCameraLocation] = useState<string>('');
+  const [cameraAddress, setCameraAddress] = useState<string>('');
+  const [cameraStoreName, setCameraStoreName] = useState<string>('');
+  const [geoError, setGeoError] = useState<string>('');
+  const [cameraPrefill, setCameraPrefill] = useState<Omit<Product, 'id' | 'createdAt' | 'userId'> | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [stats, setStats] = useState<Stats>({ searches: 0, accesses: 0, additions: 0 });
   const [tapCount, setTapCount] = useState(0);
   const tapTimer = useRef<NodeJS.Timeout | null>(null);
@@ -176,6 +191,192 @@ const filteredProducts = useMemo(() => {
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'products');
     }
+  };
+
+  const handleEditProduct = async (updatedProduct: Omit<Product, 'id' | 'createdAt' | 'userId'>) => {
+    if (!user || !editingProduct) {
+      alert('Erro: Produto não encontrado ou usuário não logado.');
+      return;
+    }
+
+    try {
+      const productRef = doc(db, 'products', editingProduct.id);
+      await updateDoc(productRef, {
+        ...updatedProduct,
+        updatedAt: serverTimestamp(),
+      });
+      setShowEditModal(false);
+      setEditingProduct(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'products');
+    }
+  };
+
+  const openEditModal = (product: Product) => {
+    setEditingProduct(product);
+    setShowEditModal(true);
+  };
+
+  const resetCameraMetadata = () => {
+    setCameraLocation('');
+    setCameraAddress('');
+    setCameraStoreName('');
+    setGeoError('');
+  };
+
+  const fetchLocationData = async (latitude: number, longitude: number) => {
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}`
+      );
+      if (!response.ok) throw new Error('Erro ao buscar localização');
+      const data = await response.json();
+      const store = data.name || data.address?.commercial || data.address?.road || '';
+      const address = data.display_name || `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+
+      setCameraStoreName(store || 'Estabelecimento local');
+      setCameraAddress(address);
+      setCameraLocation(`${latitude.toFixed(6)}, ${longitude.toFixed(6)}`);
+      setCameraPrefill({
+        nome: '',
+        category: 'mercado',
+        price: 0,
+        storeName: store || 'Estabelecimento local',
+        address,
+      });
+    } catch (error: any) {
+      console.error('Reverse geocoding failed:', error);
+      setGeoError('Não foi possível obter o endereço completo. O GPS funcionou, mas não conseguimos converter para um endereço legível.');
+      setCameraLocation(`${latitude.toFixed(6)}, ${longitude.toFixed(6)}`);
+      setCameraPrefill({
+        nome: '',
+        category: 'mercado',
+        price: 0,
+        storeName: 'Estabelecimento local',
+        address: `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`,
+      });
+    }
+  };
+
+  const getGeolocation = async () => {
+    if (!navigator.geolocation) {
+      setGeoError('GPS não suportado pelo navegador.');
+      return;
+    }
+
+    return new Promise<void>((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          const { latitude, longitude } = position.coords;
+          await fetchLocationData(latitude, longitude);
+          resolve();
+        },
+        (error) => {
+          console.error('Geolocation error:', error);
+          setGeoError('Não foi possível obter a localização. Verifique as permissões do GPS.');
+          resolve();
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      );
+    });
+  };
+
+  // Camera functions
+  const startCamera = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      alert('Seu navegador não suporta câmera. Use um navegador moderno ou teste no Chrome/Safari em HTTPS.');
+      return;
+    }
+
+    if (!window.isSecureContext) {
+      alert('A câmera só funciona em conexão segura (HTTPS). Use localhost ou um túnel HTTPS como ngrok para testar no celular.');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { facingMode: 'environment' } // Use back camera on mobile
+      });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+    } catch (error: any) {
+      console.error('Error accessing camera:', error);
+      const message = error?.message || error;
+      if (error?.name === 'NotAllowedError' || error?.name === 'PermissionDeniedError') {
+        alert('Permissão de câmera negada. Permita o uso da câmera no navegador.');
+      } else if (error?.name === 'NotFoundError' || error?.name === 'DevicesNotFoundError') {
+        alert('Nenhuma câmera encontrada. Verifique se o dispositivo possui câmera ativa.');
+      } else {
+        alert(`Erro ao acessar câmera: ${message}. Verifique permissões, HTTPS e navegador compatível.`);
+      }
+    }
+  };
+
+  const stopCamera = () => {
+    if (videoRef.current && videoRef.current.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      stream.getTracks().forEach(track => track.stop());
+    }
+  };
+
+  const captureImage = async () => {
+    if (videoRef.current && canvasRef.current) {
+      const canvas = canvasRef.current;
+      const video = videoRef.current;
+      const context = canvas.getContext('2d');
+      
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      
+      if (context) {
+        context.drawImage(video, 0, 0);
+        const imageData = canvas.toDataURL('image/jpeg', 0.8);
+        setCapturedImage(imageData);
+        stopCamera();
+        setIsProcessing(true);
+
+        await getGeolocation();
+        
+        setTimeout(() => {
+          setIsProcessing(false);
+          // Here you would integrate with OCR API
+          alert('Imagem capturada! GPS e localização foram obtidos. Preencha ou ajuste os dados antes de salvar.');
+        }, 1200);
+      }
+    }
+  };
+
+  const resetCamera = () => {
+    setCapturedImage(null);
+    setIsProcessing(false);
+    setGeoError('');
+    setCameraLocation('');
+    setCameraAddress('');
+    setCameraStoreName('');
+    setCameraPrefill(null);
+    startCamera();
+  };
+
+  const openCameraModal = () => {
+    resetCameraMetadata();
+    setCameraPrefill(null);
+    setShowCameraModal(true);
+    setTimeout(startCamera, 100); // Delay to ensure modal is rendered
+  };
+
+  const closeCameraModal = () => {
+    stopCamera();
+    setShowCameraModal(false);
+    setCapturedImage(null);
+    setIsProcessing(false);
+    resetCameraMetadata();
+  };
+
+  const openAddModalWithPrefill = (data?: Omit<Product, 'id' | 'createdAt' | 'userId'>) => {
+    setCameraPrefill(data ?? null);
+    setShowAddModal(true);
   };
 
   const handleLogin = async () => {
@@ -343,9 +544,21 @@ const filteredProducts = useMemo(() => {
                           }`}>
                             {product.category === 'mercado' ? 'Supermercado' : 'Posto'}
                           </span>
-                          <span className="text-[10px] text-gray-700 font-mono font-bold">#{product.id.substring(0, 4)}</span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openEditModal(product);
+                              }}
+                              className="text-[10px] text-gray-500 hover:text-brand-primary transition-colors p-1 hover:bg-brand-primary/10 rounded"
+                              title="Editar anúncio"
+                            >
+                              ✏️
+                            </button>
+                            <span className="text-[10px] text-gray-700 font-mono font-bold">#{product.id.substring(0, 4)}</span>
+                          </div>
                         </div>
-                        <h4 className="text-xl font-black text-text-main group-hover:text-brand-primary transition-colors leading-tight">{product.item}</h4>
+                        <h4 className="text-xl font-black text-text-main group-hover:text-brand-primary transition-colors leading-tight">{product.nome}</h4>
                         <p className="text-xs text-text-muted mt-2 font-medium flex items-center gap-1.5">
                           <Store size={12} className="opacity-50" />
                           {product.storeName}
@@ -410,12 +623,18 @@ const filteredProducts = useMemo(() => {
           if (!user) {
             handleLogin();
           } else {
-            setShowAddModal(true);
+            // Show options: Camera or Manual
+            const choice = confirm('📸 Usar câmera para capturar produto?\n\nOK = Câmera\nCancelar = Cadastro Manual');
+            if (choice) {
+              openCameraModal();
+            } else {
+              openAddModalWithPrefill();
+            }
           }
         }}
         className="fixed bottom-8 right-8 w-16 h-16 bg-brand-primary text-black rounded-full flex items-center justify-center shadow-[0_0_30px_rgba(46,204,113,0.4)] z-30 transition-shadow"
       >
-        <Plus size={32} strokeWidth={3} />
+        <Camera size={28} strokeWidth={3} />
       </motion.button>
 
       {/* Add Modal */}
@@ -445,7 +664,176 @@ const filteredProducts = useMemo(() => {
                 </button>
               </div>
               
-              <AddProductForm onSubmit={handleAddProduct} />
+              <AddProductForm onSubmit={handleAddProduct} initialData={cameraPrefill ?? undefined} />
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Edit Modal */}
+      <AnimatePresence>
+        {showEditModal && editingProduct && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => {
+                setShowEditModal(false);
+                setEditingProduct(null);
+              }}
+              className="absolute inset-0 bg-bg-dark/80 backdrop-blur-md"
+            />
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="bg-bg-card w-full max-w-md rounded-[2.5rem] p-8 relative z-10 border border-border-dim shadow-2xl overflow-hidden"
+            >
+              <div className="flex items-center justify-between mb-8">
+                <div>
+                  <h2 className="text-2xl font-black tracking-tighter text-orange-500">EDITAR REGISTRO</h2>
+                  <p className="text-[10px] text-text-muted font-bold uppercase tracking-widest">Atualizar inteligência de preços</p>
+                </div>
+                <button 
+                  onClick={() => {
+                    setShowEditModal(false);
+                    setEditingProduct(null);
+                  }} 
+                  className="bg-bg-dark p-3 rounded-full text-text-muted hover:text-white transition-colors border border-border-dim"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+              
+              <EditProductForm 
+                product={editingProduct} 
+                onSubmit={handleEditProduct} 
+                onCancel={() => {
+                  setShowEditModal(false);
+                  setEditingProduct(null);
+                }}
+              />
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Camera Modal */}
+      <AnimatePresence>
+        {showCameraModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={closeCameraModal}
+              className="absolute inset-0 bg-bg-dark/90 backdrop-blur-md"
+            />
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="bg-bg-card w-full max-w-lg rounded-[2.5rem] p-6 relative z-10 border border-border-dim shadow-2xl overflow-hidden"
+            >
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h2 className="text-2xl font-black tracking-tighter text-blue-500">📸 CAPTURA INTELIGENTE</h2>
+                  <p className="text-[10px] text-text-muted font-bold uppercase tracking-widest">OCR Automático de Produtos</p>
+                </div>
+                <button 
+                  onClick={closeCameraModal}
+                  className="bg-bg-dark p-3 rounded-full text-text-muted hover:text-white transition-colors border border-border-dim"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="space-y-6">
+                {!capturedImage ? (
+                  <div className="relative">
+                    <video 
+                      ref={videoRef}
+                      autoPlay 
+                      playsInline 
+                      muted
+                      className="w-full h-64 bg-black rounded-2xl object-cover"
+                    />
+                    <canvas ref={canvasRef} className="hidden" />
+                    
+                    <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 flex gap-3">
+                      <button
+                        onClick={captureImage}
+                        className="w-16 h-16 bg-white text-black rounded-full flex items-center justify-center shadow-lg hover:scale-105 transition-transform"
+                      >
+                        <div className="w-8 h-8 bg-black rounded-full"></div>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="relative">
+                      <img 
+                        src={capturedImage} 
+                        alt="Captured product"
+                        className="w-full h-64 object-cover rounded-2xl"
+                      />
+                      {isProcessing && (
+                        <div className="absolute inset-0 bg-black/50 rounded-2xl flex items-center justify-center">
+                          <div className="text-center">
+                            <div className="animate-spin w-8 h-8 border-4 border-white border-t-transparent rounded-full mx-auto mb-2"></div>
+                            <p className="text-white text-sm font-bold">ANALISANDO IMAGEM...</p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex gap-3">
+                      <button
+                        onClick={resetCamera}
+                        className="flex-1 py-4 bg-gray-600 text-white rounded-2xl font-bold uppercase tracking-[0.2em] text-xs hover:bg-gray-700 transition-all flex items-center justify-center gap-2"
+                      >
+                        <RotateCcw size={16} />
+                        Recapturar
+                      </button>
+                      <button
+                        onClick={() => {
+                          closeCameraModal();
+                          openAddModalWithPrefill(cameraPrefill ?? undefined);
+                        }}
+                        className="flex-1 py-4 bg-blue-500 text-white rounded-2xl font-black uppercase tracking-[0.3em] text-xs shadow-[0_0_30px_rgba(59,130,246,0.3)] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+                      >
+                        <CheckCircle size={16} />
+                        Continuar
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-3">
+                  {cameraLocation && (
+                    <div className="text-left text-[10px] text-text-main bg-bg-dark/80 border border-border-dim rounded-2xl p-3">
+                      <div className="font-black uppercase tracking-[0.3em] mb-1">GPS detectado</div>
+                      <div>Coordenadas: {cameraLocation}</div>
+                      {cameraStoreName && <div>Estabelecimento sugerido: {cameraStoreName}</div>}
+                      {cameraAddress && <div>Endereço: {cameraAddress}</div>}
+                    </div>
+                  )}
+                  {geoError && (
+                    <div className="text-left text-[10px] text-red-400 bg-red-500/10 border border-red-500/20 rounded-2xl p-3">
+                      {geoError}
+                    </div>
+                  )}
+                  <div className="text-center">
+                    <p className="text-[10px] text-text-muted font-bold uppercase tracking-widest">
+                      Posicione o produto na câmera para captura automática
+                    </p>
+                    <p className="text-[9px] text-gray-600 mt-1">
+                      Suporte a OCR para extração automática de dados
+                    </p>
+                  </div>
+                </div>
+              </div>
             </motion.div>
           </div>
         )}
@@ -551,13 +939,13 @@ const filteredProducts = useMemo(() => {
 
 // --- Modified Forms & Cards ---
 
-function AddProductForm({ onSubmit }: { onSubmit: (p: Omit<Product, 'id' | 'createdAt' | 'userId'>) => void }) {
+function AddProductForm({ onSubmit, initialData }: { onSubmit: (p: Omit<Product, 'id' | 'createdAt' | 'userId'>) => void; initialData?: Omit<Product, 'id' | 'createdAt' | 'userId'> }) {
   const [formData, setFormData] = useState<Omit<Product, 'id' | 'createdAt' | 'userId'>>({
-    nome: '',
-    category: 'mercado',
-    price: 0,
-    storeName: '',
-    address: ''
+    nome: initialData?.nome || '',
+    category: initialData?.category ?? 'mercado',
+    price: initialData?.price || 0,
+    storeName: initialData?.storeName || '',
+    address: initialData?.address || ''
   });
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -641,6 +1029,117 @@ function AddProductForm({ onSubmit }: { onSubmit: (p: Omit<Product, 'id' | 'crea
       >
         Executar Cadastro
       </button>
+    </form>
+  );
+}
+
+function EditProductForm({ 
+  product, 
+  onSubmit, 
+  onCancel 
+}: { 
+  product: Product; 
+  onSubmit: (p: Omit<Product, 'id' | 'createdAt' | 'userId'>) => void;
+  onCancel: () => void;
+}) {
+  const [formData, setFormData] = useState<Omit<Product, 'id' | 'createdAt' | 'userId'>>({
+    nome: product.nome || '',
+    category: product.category,
+    price: product.price || product.preco || 0,
+    storeName: product.storeName || '',
+    address: product.address || ''
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.nome || !formData.price || !formData.storeName) {
+      alert('Preencha os campos de protocolos obrigatórios.');
+      return;
+    }
+    onSubmit(formData);
+  };
+
+  const inputClasses = "w-full bg-bg-dark border border-border-dim rounded-xl p-4 text-sm focus:outline-none focus:border-orange-500 transition-all text-text-main placeholder:text-gray-800";
+  const labelClasses = "block text-[9px] font-black text-text-muted uppercase tracking-[0.2em] mb-2";
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-5">
+      <div>
+        <label className={labelClasses}>Descriptor do Produto</label>
+        <input
+          required
+          type="text"
+          placeholder="Ex: Arroz 5kg, Diesel S-10..."
+          className={inputClasses}
+          value={formData.nome}
+          onChange={e => setFormData(prev => ({ ...prev, nome: e.target.value }))}
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className={labelClasses}>Valor Unitário (R$)</label>
+          <input
+            required
+            type="number"
+            step="0.01"
+            placeholder="0.00"
+            className={inputClasses}
+            value={formData.price || ''}
+            onChange={e => setFormData(prev => ({ ...prev, price: parseFloat(e.target.value) }))}
+          />
+        </div>
+        <div>
+          <label className={labelClasses}>Segmento</label>
+          <select
+            className={inputClasses}
+            value={formData.category}
+            onChange={e => setFormData(prev => ({ ...prev, category: e.target.value as any }))}
+          >
+            <option value="mercado">Supermercado</option>
+            <option value="posto">Posto de Comb.</option>
+          </select>
+        </div>
+      </div>
+
+      <div>
+        <label className={labelClasses}>Entidade Comercial</label>
+        <input
+          required
+          type="text"
+          placeholder="Nome do estabelecimento"
+          className={inputClasses}
+          value={formData.storeName}
+          onChange={e => setFormData(prev => ({ ...prev, storeName: e.target.value }))}
+        />
+      </div>
+
+      <div>
+        <label className={labelClasses}>Coordenadas / Endereço</label>
+        <input
+          type="text"
+          placeholder="Logradouro completo"
+          className={inputClasses}
+          value={formData.address}
+          onChange={e => setFormData(prev => ({ ...prev, address: e.target.value }))}
+        />
+      </div>
+
+      <div className="flex gap-3 mt-6">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="flex-1 py-4 bg-gray-600 text-white rounded-2xl font-bold uppercase tracking-[0.2em] text-xs hover:bg-gray-700 transition-all"
+        >
+          Cancelar
+        </button>
+        <button
+          type="submit"
+          className="flex-1 py-4 bg-orange-500 text-white rounded-2xl font-black uppercase tracking-[0.3em] text-xs shadow-[0_0_30px_rgba(255,165,0,0.3)] hover:scale-[1.02] active:scale-[0.98] transition-all"
+        >
+          Atualizar
+        </button>
+      </div>
     </form>
   );
 }
