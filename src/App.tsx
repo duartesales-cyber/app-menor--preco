@@ -42,7 +42,8 @@ import { handleFirestoreError, OperationType } from './lib/firestore-errors';
 interface Product {
   id: string;
   nome: string;
-  preco: number;
+  price?: number;
+preco?: number;
   category: 'mercado' | 'posto';
   storeName?: string;
   address?: string;
@@ -76,22 +77,24 @@ export default function App() {
       setUser(currentUser);
       setLoading(false);
     });
-  }, []);
+  }, [user]);
 
   // Products Listener
   useEffect(() => {
-const q = query(collection(db, 'produtos'), where('uid', '==', user?.uid));
+    if (!user) return;
+const q = query(collection(db, 'products'));
   const unsubscribe = onSnapshot(q, (snapshot) => {
       const docs = snapshot.docs.map((doc) => ({
         id: doc.id, 
         ...doc.data() 
       } as Product));
+      console.log('PRODUTOS ENCONTRADOS:', docs);
       setProducts(docs);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'products');
     });
     return unsubscribe;
-  }, []);
+  }, [user]);
 
   // Stats Listener
   useEffect(() => {
@@ -112,16 +115,16 @@ const q = query(collection(db, 'produtos'), where('uid', '==', user?.uid));
   }, []);
 
   // Filtered Products
-  const filteredProducts = useMemo(() => {
+const filteredProducts = useMemo(() => {
     return products
-      .filter(p => {
-  const matchesSearch = p.nome.toLowerCase().includes(search.toLowerCase()) || 
+    .filter((p: any) =>{
+        const matchesSearch = (p.item ?? '').toLowerCase().includes(search.toLowerCase()) || 
                              (p.storeName?.toLowerCase().includes(search.toLowerCase()) ?? false);
         const matchesFilter = filter === 'todos' || p.category === filter;
+        return matchesSearch && matchesFilter;
       })
-      .sort((a, b) => a.preco - b.preco);
+      .sort((a: any, b: any) => Number(a.preco) - Number(b.preco));
   }, [products, search, filter]);
-
   const incrementStat = async (field: keyof Stats) => {
     if (!user) return;
     try {
@@ -137,7 +140,7 @@ const q = query(collection(db, 'produtos'), where('uid', '==', user?.uid));
 
   // Admin access logic
   const handleHeaderTap = () => {
-    setTapCount(prev => prev + 1);
+    setTapCount((prev: any) => prev + 1);
     if (tapTimer.current) clearTimeout(tapTimer.current);
     
     tapTimer.current = setTimeout(() => {
@@ -185,7 +188,7 @@ const q = query(collection(db, 'produtos'), where('uid', '==', user?.uid));
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="min-h-screen flex items-centers-center justify-center bg-gray-50">
         <motion.div 
           animate={{ rotate: 360 }} 
           transition={{ repeat: Infinity, duration: 1, ease: 'linear' }}
@@ -306,10 +309,10 @@ const q = query(collection(db, 'produtos'), where('uid', '==', user?.uid));
                 <div className="absolute top-0 right-0 w-24 h-24 bg-brand-primary/5 blur-3xl rounded-full" />
                 <h3 className="text-sm font-black text-brand-primary mb-3 italic tracking-tighter uppercase">Destaque do Dia</h3>
                 <p className="text-xs text-text-muted leading-relaxed mb-6 font-medium">
-                  {filteredProducts[0].item} com o melhor valor detectado na região. Economia superior a 15% comparado à média.
+                  {filteredProducts[0].nome} com o melhor valor detectado na região. Economia superior a 15% comparado à média.
                 </p>
                 <div className="flex items-end gap-2">
-                  <span className="text-4xl font-black tracking-tighter text-text-main">R$ {filteredProducts[0].price.toFixed(2)}</span>
+                  <span className="text-4xl font-black tracking-tighter text-text-main">R$ {filteredProducts[0].price?.toFixed(2)}</span>
                   <span className="text-[10px] text-brand-primary font-bold uppercase mb-1.5 animate-pulse">AO VIVO</span>
                 </div>
               </motion.div>
@@ -352,7 +355,7 @@ const q = query(collection(db, 'produtos'), where('uid', '==', user?.uid));
                       <div className="mt-8 flex justify-between items-end border-t border-border-dim pt-4">
                         <div className="flex flex-col gap-1">
                           <div className="flex items-center gap-1 text-[10px] text-gray-700 font-bold uppercase">
-                            <MapPin size={10} /> {product.address.substring(0, 15)}...
+                            {product.address?.substring(0, 15)}
                           </div>
                           <div className="text-[10px] text-gray-700 font-medium">
                             {product.createdAt?.seconds 
@@ -362,7 +365,7 @@ const q = query(collection(db, 'produtos'), where('uid', '==', user?.uid));
                         </div>
                         <div className="text-3xl font-black text-brand-primary tracking-tighter">
                           <span className="text-sm font-sans mr-0.5">R$</span>
-                          {product.price.toFixed(2)}
+                          {(product.price??0).toFixed(2)}
                         </div>
                       </div>
                     </motion.div>
@@ -550,7 +553,7 @@ const q = query(collection(db, 'produtos'), where('uid', '==', user?.uid));
 
 function AddProductForm({ onSubmit }: { onSubmit: (p: Omit<Product, 'id' | 'createdAt' | 'userId'>) => void }) {
   const [formData, setFormData] = useState<Omit<Product, 'id' | 'createdAt' | 'userId'>>({
-    item: '',
+    nome: '',
     category: 'mercado',
     price: 0,
     storeName: '',
@@ -559,7 +562,7 @@ function AddProductForm({ onSubmit }: { onSubmit: (p: Omit<Product, 'id' | 'crea
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.item || !formData.price || !formData.storeName) {
+    if (!formData.nome || !formData.price || !formData.storeName) {
       alert('Preencha os campos de protocolos obrigatórios.');
       return;
     }
@@ -578,8 +581,8 @@ function AddProductForm({ onSubmit }: { onSubmit: (p: Omit<Product, 'id' | 'crea
           type="text"
           placeholder="Ex: Arroz 5kg, Diesel S-10..."
           className={inputClasses}
-          value={formData.item}
-          onChange={e => setFormData(prev => ({ ...prev, item: e.target.value }))}
+          value={formData.nome}
+          onChange={e => setFormData(prev => ({ ...prev, nome: e.target.value }))}
         />
       </div>
 
