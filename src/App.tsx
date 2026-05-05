@@ -28,6 +28,7 @@ import {
   collection, 
   onSnapshot, 
   addDoc, 
+  deleteDoc,
   doc, 
   setDoc, 
   getDoc, 
@@ -35,10 +36,11 @@ import {
   query, 
   orderBy,
   increment,
-  updateDoc,where
+  updateDoc,
+  where
 } from 'firebase/firestore';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
-import { db, auth, signInWithGoogle } from './lib/firebase';
+import { db, auth, signInWithGoogle, uploadProductImage } from './lib/firebase';
 import { handleFirestoreError, OperationType } from './lib/firestore-errors';
 
 // --- Types ---.
@@ -50,6 +52,7 @@ preco?: number;
   category: 'mercado' | 'posto';
   storeName?: string;
   address?: string;
+  imageUrl?: string;
   uid?: string;
   createdAt?: any;
 }
@@ -73,7 +76,11 @@ export default function App() {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [showCameraModal, setShowCameraModal] = useState(false);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [cameraPhotoData, setCameraPhotoData] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [cameraStarted, setCameraStarted] = useState(false);
+  const [cameraError, setCameraError] = useState<string>('');
+  const [ocrError, setOcrError] = useState<string>('');
   const [cameraLocation, setCameraLocation] = useState<string>('');
   const [cameraAddress, setCameraAddress] = useState<string>('');
   const [cameraStoreName, setCameraStoreName] = useState<string>('');
@@ -85,6 +92,7 @@ export default function App() {
   const [tapCount, setTapCount] = useState(0);
   const tapTimer = useRef<NodeJS.Timeout | null>(null);
   const [loading, setLoading] = useState(true);
+  const [saveMessage, setSaveMessage] = useState<string>('');
 
   // Auth Listener
   useEffect(() => {
@@ -180,15 +188,38 @@ const filteredProducts = useMemo(() => {
       return;
     }
 
+    let imageUrl: string | undefined;
+    if (cameraPhotoData) {
+      try {
+        imageUrl = await uploadProductImage(
+          cameraPhotoData,
+          `product-${user.uid}-${Date.now()}.jpg`
+        );
+      } catch (uploadError) {
+        console.error('Erro no upload da imagem, salvando sem foto:', uploadError);
+        imageUrl = undefined;
+      }
+    }
+
     try {
       await addDoc(collection(db, 'products'), {
         ...newProduct,
+        ...(imageUrl ? { imageUrl } : {}),
         userId: user.uid,
         createdAt: serverTimestamp(),
       });
+
       incrementStat('additions');
+      setSaveMessage('Produto salvo com sucesso!');
       setShowAddModal(false);
+      setCameraPrefill(null);
+      setCameraPhotoData(null);
+      setCapturedImage(null);
+      window.setTimeout(() => setSaveMessage(''), 4500);
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error('Erro ao salvar produto:', error);
+      alert(`Erro ao salvar produto: ${errorMessage}`);
       handleFirestoreError(error, OperationType.CREATE, 'products');
     }
   };
@@ -209,6 +240,24 @@ const filteredProducts = useMemo(() => {
       setEditingProduct(null);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'products');
+    }
+  };
+
+  const handleDeleteProduct = async (productId: string) => {
+    if (!user) {
+      alert('Você precisa estar logado para excluir um produto.');
+      return;
+    }
+
+    const confirmed = confirm('Deseja realmente excluir este produto? Esta ação não pode ser desfeita.');
+    if (!confirmed) return;
+
+    try {
+      await deleteDoc(doc(db, 'products', productId));
+      setShowEditModal(false);
+      setEditingProduct(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `products/${productId}`);
     }
   };
 
@@ -283,33 +332,38 @@ const filteredProducts = useMemo(() => {
 
   // Camera functions
   const startCamera = async () => {
+    setCameraError('');
+
     if (!navigator.mediaDevices?.getUserMedia) {
-      alert('Seu navegador não suporta câmera. Use um navegador moderno ou teste no Chrome/Safari em HTTPS.');
+      setCameraError('Seu navegador não suporta câmera. Use um navegador moderno ou teste no Chrome/Safari em HTTPS.');
       return;
     }
 
     if (!window.isSecureContext) {
-      alert('A câmera só funciona em conexão segura (HTTPS). Use localhost ou um túnel HTTPS como ngrok para testar no celular.');
+      setCameraError('A câmera só funciona em conexão segura (HTTPS). Use localhost ou um túnel HTTPS.');
       return;
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: 'environment' } // Use back camera on mobile
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' }
       });
+
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
       }
+
+      setCameraStarted(true);
     } catch (error: any) {
       console.error('Error accessing camera:', error);
-      const message = error?.message || error;
+      const message = error?.message || 'Erro desconhecido ao acessar a câmera.';
       if (error?.name === 'NotAllowedError' || error?.name === 'PermissionDeniedError') {
-        alert('Permissão de câmera negada. Permita o uso da câmera no navegador.');
+        setCameraError('Permissão de câmera negada. Permita o uso da câmera no navegador.');
       } else if (error?.name === 'NotFoundError' || error?.name === 'DevicesNotFoundError') {
-        alert('Nenhuma câmera encontrada. Verifique se o dispositivo possui câmera ativa.');
+        setCameraError('Nenhuma câmera encontrada. Verifique se o dispositivo possui câmera ativa.');
       } else {
-        alert(`Erro ao acessar câmera: ${message}. Verifique permissões, HTTPS e navegador compatível.`);
+        setCameraError(`Erro ao acessar câmera: ${message}. Verifique permissões, HTTPS e navegador compatível.`);
       }
     }
   };
@@ -334,18 +388,86 @@ const filteredProducts = useMemo(() => {
         context.drawImage(video, 0, 0);
         const imageData = canvas.toDataURL('image/jpeg', 0.8);
         setCapturedImage(imageData);
+        setCameraPhotoData(imageData);
         stopCamera();
         setIsProcessing(true);
+        setOcrError('');
 
         await getGeolocation();
-        
-        setTimeout(() => {
+
+        try {
+          const ocrResult = await processOcr(imageData);
+          if (ocrResult) {
+            setCameraPrefill(prev => ({
+              ... (prev ?? {
+                nome: '',
+                category: 'mercado',
+                price: 0,
+                storeName: '',
+                address: ''
+              }),
+              nome: ocrResult.nome || prev?.nome || '',
+              price: ocrResult.price ?? prev?.price ?? 0,
+              storeName: ocrResult.storeName || prev?.storeName || 'Estabelecimento local'
+            }));
+          }
+        } catch (error: any) {
+          setOcrError(error?.message || 'Erro ao processar OCR. Verifique a imagem e tente novamente.');
+        } finally {
           setIsProcessing(false);
-          // Here you would integrate with OCR API
-          alert('Imagem capturada! GPS e localização foram obtidos. Preencha ou ajuste os dados antes de salvar.');
-        }, 1200);
+        }
       }
     }
+  };
+
+  const callOcrApi = async (dataUrl: string) => {
+    const formData = new FormData();
+    formData.append('apikey', 'helloworld');
+    formData.append('base64Image', dataUrl);
+    formData.append('language', 'por');
+    formData.append('isOverlayRequired', 'false');
+
+    const response = await fetch('https://api.ocr.space/parse/image', {
+      method: 'POST',
+      body: formData
+    });
+
+    if (!response.ok) {
+      throw new Error('Falha na requisição OCR.');
+    }
+
+    const result = await response.json();
+    if (result.IsErroredOnProcessing || !result.ParsedResults?.length) {
+      throw new Error(result.ErrorMessage?.[0] || 'Erro no processamento OCR.');
+    }
+
+    return result.ParsedResults[0].ParsedText as string;
+  };
+
+  const parseOcrText = (text: string) => {
+    const lines = text
+      .split(/\r?\n/)
+      .map((line: string) => line.trim())
+      .filter((line: string) => line.length > 0);
+
+    const priceMatch = text.match(/(?:R\$|RS|r\$)?\s*([0-9]+(?:[.,][0-9]{2}))/i);
+    const price = priceMatch ? parseFloat(priceMatch[1].replace(',', '.')) : undefined;
+    const nonNumericLines = lines.filter((line: string) => !/(?:R\$|RS|\d)/i.test(line));
+
+    return {
+      nome: nonNumericLines[0] ?? lines[0] ?? '',
+      price,
+      storeName: nonNumericLines[1] ?? nonNumericLines[0] ?? ''
+    };
+  };
+
+  const processOcr = async (imageData: string) => {
+    const text = await callOcrApi(imageData);
+    const extracted = parseOcrText(text);
+    if (!extracted.nome && extracted.price === undefined && !extracted.storeName) {
+      throw new Error('OCR não conseguiu extrair dados válidos.');
+    }
+    return extracted;
   };
 
   const resetCamera = () => {
@@ -362,21 +484,34 @@ const filteredProducts = useMemo(() => {
   const openCameraModal = () => {
     resetCameraMetadata();
     setCameraPrefill(null);
+    setCameraError('');
     setShowCameraModal(true);
-    setTimeout(startCamera, 100); // Delay to ensure modal is rendered
+    setCameraStarted(false);
+    // Don't start camera automatically, wait for user interaction
   };
 
-  const closeCameraModal = () => {
+  const closeCameraModal = (preserveImage = false) => {
     stopCamera();
     setShowCameraModal(false);
-    setCapturedImage(null);
+    if (!preserveImage) {
+      setCapturedImage(null);
+      setCameraPhotoData(null);
+    }
     setIsProcessing(false);
+    setCameraStarted(false);
+    setCameraError('');
+    setOcrError('');
     resetCameraMetadata();
   };
 
   const openAddModalWithPrefill = (data?: Omit<Product, 'id' | 'createdAt' | 'userId'>) => {
     setCameraPrefill(data ?? null);
     setShowAddModal(true);
+  };
+
+  const removePreviewImage = () => {
+    setCameraPhotoData(null);
+    setCapturedImage(null);
   };
 
   const handleLogin = async () => {
@@ -389,7 +524,7 @@ const filteredProducts = useMemo(() => {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-centers-center justify-center bg-gray-50">
+      <div className="min--screen flex items-centers-center justify-center bg-gray-50">
         <motion.div 
           animate={{ rotate: 360 }} 
           transition={{ repeat: Infinity, duration: 1, ease: 'linear' }}
@@ -450,6 +585,12 @@ const filteredProducts = useMemo(() => {
             </div>
           </div>
         </header>
+
+        {saveMessage && (
+          <div className="mb-6 rounded-3xl border border-brand-primary/20 bg-brand-primary/10 p-4 text-sm font-bold text-brand-primary shadow-sm">
+            {saveMessage}
+          </div>
+        )}
 
         {/* Content Grid */}
         <div className="grid grid-cols-12 gap-8">
@@ -558,6 +699,19 @@ const filteredProducts = useMemo(() => {
                             <span className="text-[10px] text-gray-700 font-mono font-bold">#{product.id.substring(0, 4)}</span>
                           </div>
                         </div>
+                        {product.imageUrl ? (
+                          <div className="mb-4 overflow-hidden rounded-3xl border border-border-dim">
+                            <img
+                              src={product.imageUrl}
+                              alt={product.nome}
+                              className="w-full h-40 object-cover"
+                            />
+                          </div>
+                        ) : (
+                          <div className="mb-4 w-full h-40 rounded-3xl bg-gray-900/80 border border-border-dim flex items-center justify-center text-gray-500">
+                            <Camera size={32} />
+                          </div>
+                        )}
                         <h4 className="text-xl font-black text-text-main group-hover:text-brand-primary transition-colors leading-tight">{product.nome}</h4>
                         <p className="text-xs text-text-muted mt-2 font-medium flex items-center gap-1.5">
                           <Store size={12} className="opacity-50" />
@@ -652,9 +806,9 @@ const filteredProducts = useMemo(() => {
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="bg-bg-card w-full max-w-md rounded-[2.5rem] p-8 relative z-10 border border-border-dim shadow-2xl overflow-hidden"
+              className="bg-bg-card w-full max-w-md rounded-[2.5rem] p-6 sm:p-8 relative z-10 border border-border-dim shadow-2xl overflow-y-auto max-h-[90vh]"
             >
-              <div className="flex items-center justify-between mb-8">
+              <div className="flex items-center justify-between mb-6 gap-4">
                 <div>
                   <h2 className="text-2xl font-black tracking-tighter text-brand-primary">NOVO REGISTRO</h2>
                   <p className="text-[10px] text-text-muted font-bold uppercase tracking-widest">Compartilhe inteligência de preços</p>
@@ -664,7 +818,12 @@ const filteredProducts = useMemo(() => {
                 </button>
               </div>
               
-              <AddProductForm onSubmit={handleAddProduct} initialData={cameraPrefill ?? undefined} />
+              <AddProductForm
+                onSubmit={handleAddProduct}
+                initialData={cameraPrefill ?? undefined}
+                previewImage={cameraPhotoData ?? undefined}
+                onRemovePreviewImage={removePreviewImage}
+              />
             </motion.div>
           </div>
         )}
@@ -688,7 +847,7 @@ const filteredProducts = useMemo(() => {
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="bg-bg-card w-full max-w-md rounded-[2.5rem] p-8 relative z-10 border border-border-dim shadow-2xl overflow-hidden"
+              className="bg-bg-card w-full max-w-md rounded-[2.5rem] p-6 sm:p-8 relative z-10 border border-border-dim shadow-2xl overflow-y-auto max-h-[90vh]"
             >
               <div className="flex items-center justify-between mb-8">
                 <div>
@@ -713,6 +872,7 @@ const filteredProducts = useMemo(() => {
                   setShowEditModal(false);
                   setEditingProduct(null);
                 }}
+                onDelete={handleDeleteProduct}
               />
             </motion.div>
           </div>
@@ -727,7 +887,7 @@ const filteredProducts = useMemo(() => {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={closeCameraModal}
+              onClick={() => closeCameraModal()}
               className="absolute inset-0 bg-bg-dark/90 backdrop-blur-md"
             />
             <motion.div
@@ -742,7 +902,7 @@ const filteredProducts = useMemo(() => {
                   <p className="text-[10px] text-text-muted font-bold uppercase tracking-widest">OCR Automático de Produtos</p>
                 </div>
                 <button 
-                  onClick={closeCameraModal}
+                  onClick={() => closeCameraModal()}
                   className="bg-bg-dark p-3 rounded-full text-text-muted hover:text-white transition-colors border border-border-dim"
                 >
                   <X size={20} />
@@ -760,15 +920,43 @@ const filteredProducts = useMemo(() => {
                       className="w-full h-64 bg-black rounded-2xl object-cover"
                     />
                     <canvas ref={canvasRef} className="hidden" />
-                    
-                    <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 flex gap-3">
-                      <button
-                        onClick={captureImage}
-                        className="w-16 h-16 bg-white text-black rounded-full flex items-center justify-center shadow-lg hover:scale-105 transition-transform"
-                      >
-                        <div className="w-8 h-8 bg-black rounded-full"></div>
-                      </button>
-                    </div>
+
+                    {!cameraStarted && (
+                      <div className="absolute inset-0 rounded-2xl bg-black/75 flex flex-col items-center justify-center gap-4 p-4">
+                        <button
+                          type="button"
+                          onClick={startCamera}
+                          className="px-6 py-3 bg-brand-primary text-black rounded-full font-bold hover:bg-opacity-80 transition-colors"
+                        >
+                          📸 Iniciar Câmera
+                        </button>
+                        {cameraError && (
+                          <div className="text-sm text-red-100 bg-red-600/90 rounded-2xl px-4 py-3 text-center">
+                            {cameraError}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {cameraStarted && (
+                      <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 flex gap-3">
+                        <button
+                          type="button"
+                          onClick={captureImage}
+                          className="w-16 h-16 bg-white text-black rounded-full flex items-center justify-center shadow-lg hover:scale-105 transition-transform"
+                        >
+                          <div className="w-8 h-8 bg-black rounded-full"></div>
+                        </button>
+                      </div>
+                    )}
+
+                    {cameraError && cameraStarted && (
+                      <div className="absolute bottom-28 left-1/2 transform -translate-x-1/2 px-4">
+                        <div className="text-sm text-red-100 bg-red-600/90 rounded-2xl px-4 py-3 text-center">
+                          {cameraError}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="space-y-4">
@@ -788,6 +976,12 @@ const filteredProducts = useMemo(() => {
                       )}
                     </div>
 
+                    {ocrError && (
+                      <div className="text-sm text-red-100 bg-red-600/90 rounded-2xl px-4 py-3 text-center">
+                        {ocrError}
+                      </div>
+                    )}
+
                     <div className="flex gap-3">
                       <button
                         onClick={resetCamera}
@@ -798,7 +992,7 @@ const filteredProducts = useMemo(() => {
                       </button>
                       <button
                         onClick={() => {
-                          closeCameraModal();
+                          closeCameraModal(true);
                           openAddModalWithPrefill(cameraPrefill ?? undefined);
                         }}
                         className="flex-1 py-4 bg-blue-500 text-white rounded-2xl font-black uppercase tracking-[0.3em] text-xs shadow-[0_0_30px_rgba(59,130,246,0.3)] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2"
@@ -939,42 +1133,87 @@ const filteredProducts = useMemo(() => {
 
 // --- Modified Forms & Cards ---
 
-function AddProductForm({ onSubmit, initialData }: { onSubmit: (p: Omit<Product, 'id' | 'createdAt' | 'userId'>) => void; initialData?: Omit<Product, 'id' | 'createdAt' | 'userId'> }) {
+function AddProductForm({ onSubmit, initialData, previewImage, onRemovePreviewImage }: { onSubmit: (p: Omit<Product, 'id' | 'createdAt' | 'userId'>) => void; initialData?: Omit<Product, 'id' | 'createdAt' | 'userId'>; previewImage?: string; onRemovePreviewImage?: () => void }) {
   const [formData, setFormData] = useState<Omit<Product, 'id' | 'createdAt' | 'userId'>>({
     nome: initialData?.nome || '',
     category: initialData?.category ?? 'mercado',
-    price: initialData?.price || 0,
+    price: initialData?.price ?? 0,
     storeName: initialData?.storeName || '',
     address: initialData?.address || ''
   });
+  const [formError, setFormError] = useState<string>('');
+
+  useEffect(() => {
+    setFormData({
+      nome: initialData?.nome || '',
+      category: initialData?.category ?? 'mercado',
+      price: initialData?.price ?? 0,
+      storeName: initialData?.storeName || '',
+      address: initialData?.address || ''
+    });
+    setFormError('');
+  }, [initialData]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.nome || !formData.price || !formData.storeName) {
-      alert('Preencha os campos de protocolos obrigatórios.');
+    setFormError('');
+    console.log('AddProductForm submit', formData);
+
+    if (!formData.nome?.trim() ||!(formData.storeName || '')?.trim()  || formData.price === undefined || Number.isNaN(formData.price)) {
+      setFormError('Por favor, preencha o nome do produto, preço e loja corretamente.');
       return;
     }
+
     onSubmit(formData);
   };
 
   const inputClasses = "w-full bg-bg-dark border border-border-dim rounded-xl p-4 text-sm focus:outline-none focus:border-brand-primary transition-all text-text-main placeholder:text-gray-800";
-  const labelClasses = "block text-[9px] font-black text-text-muted uppercase tracking-[0.2em] mb-2";
+  const labelClasses = "block text-[10px] font-black text-text-muted uppercase tracking-[0.2em] mb-2";
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
+    <form onSubmit={handleSubmit} className="space-y-6">
+      {previewImage && (
+        <div className="rounded-[2rem] overflow-hidden border border-border-dim shadow-lg">
+          <img src={previewImage} alt="Pré-visualização da foto" className="w-full h-48 object-cover" />
+          <div className="bg-bg-dark px-4 py-3 text-[11px] uppercase tracking-[0.2em] text-text-muted font-black">
+            Foto capturada disponível para envio junto com o cadastro
+          </div>
+          {onRemovePreviewImage && (
+            <div className="p-4 bg-bg-card border-t border-border-dim">
+              <button
+                type="button"
+                onClick={onRemovePreviewImage}
+                className="w-full py-3 bg-red-500 text-white rounded-2xl font-black uppercase tracking-[0.2em] text-xs hover:bg-red-600 transition-all"
+              >
+                Remover foto
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {formError && (
+        <div className="rounded-3xl border border-red-400 bg-red-500/10 p-4 text-sm font-bold text-red-700">
+          {formError}
+        </div>
+      )}
+
       <div>
-        <label className={labelClasses}>Descriptor do Produto</label>
+        <label className={labelClasses}>DESCRIÇÃO DO PRODUTO</label>
         <input
           required
           type="text"
           placeholder="Ex: Arroz 5kg, Diesel S-10..."
           className={inputClasses}
           value={formData.nome}
-          onChange={e => setFormData(prev => ({ ...prev, nome: e.target.value }))}
+          onChange={e => {
+            setFormData(prev => ({ ...prev, nome: e.target.value }));
+            setFormError('');
+          }}
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className={labelClasses}>Valor Unitário (R$)</label>
           <input
@@ -984,7 +1223,10 @@ function AddProductForm({ onSubmit, initialData }: { onSubmit: (p: Omit<Product,
             placeholder="0.00"
             className={inputClasses}
             value={formData.price || ''}
-            onChange={e => setFormData(prev => ({ ...prev, price: parseFloat(e.target.value) }))}
+            onChange={e => {
+              setFormData(prev => ({ ...prev, price: e.target.value === '' ? 0 : parseFloat(e.target.value) }));
+              setFormError('');
+            }}
           />
         </div>
         <div>
@@ -992,7 +1234,10 @@ function AddProductForm({ onSubmit, initialData }: { onSubmit: (p: Omit<Product,
           <select
             className={inputClasses}
             value={formData.category}
-            onChange={e => setFormData(prev => ({ ...prev, category: e.target.value as any }))}
+            onChange={e => {
+              setFormData(prev => ({ ...prev, category: e.target.value as any }));
+              setFormError('');
+            }}
           >
             <option value="mercado">Supermercado</option>
             <option value="posto">Posto de Comb.</option>
@@ -1008,7 +1253,10 @@ function AddProductForm({ onSubmit, initialData }: { onSubmit: (p: Omit<Product,
           placeholder="Nome do estabelecimento"
           className={inputClasses}
           value={formData.storeName}
-          onChange={e => setFormData(prev => ({ ...prev, storeName: e.target.value }))}
+          onChange={e => {
+            setFormData(prev => ({ ...prev, storeName: e.target.value }));
+            setFormError('');
+          }}
         />
       </div>
 
@@ -1019,15 +1267,18 @@ function AddProductForm({ onSubmit, initialData }: { onSubmit: (p: Omit<Product,
           placeholder="Logradouro completo"
           className={inputClasses}
           value={formData.address}
-          onChange={e => setFormData(prev => ({ ...prev, address: e.target.value }))}
+          onChange={e => {
+            setFormData(prev => ({ ...prev, address: e.target.value }));
+            setFormError('');
+          }}
         />
       </div>
 
       <button
         type="submit"
-        className="w-full py-5 bg-brand-primary text-black rounded-2xl font-black uppercase tracking-[0.3em] text-xs shadow-[0_0_30px_rgba(46,204,113,0.3)] hover:scale-[1.02] active:scale-[0.98] transition-all mt-4"
+        className="w-full py-4 bg-brand-primary text-black rounded-2xl font-black uppercase tracking-[0.3em] text-sm shadow-[0_0_30px_rgba(46,204,113,0.3)] hover:bg-brand-primary/90 transition-all mt-4"
       >
-        Executar Cadastro
+        Salvar
       </button>
     </form>
   );
@@ -1036,11 +1287,13 @@ function AddProductForm({ onSubmit, initialData }: { onSubmit: (p: Omit<Product,
 function EditProductForm({ 
   product, 
   onSubmit, 
-  onCancel 
+  onCancel, 
+  onDelete
 }: { 
   product: Product; 
   onSubmit: (p: Omit<Product, 'id' | 'createdAt' | 'userId'>) => void;
   onCancel: () => void;
+  onDelete: (productId: string) => void;
 }) {
   const [formData, setFormData] = useState<Omit<Product, 'id' | 'createdAt' | 'userId'>>({
     nome: product.nome || '',
@@ -1065,7 +1318,7 @@ function EditProductForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
       <div>
-        <label className={labelClasses}>Descriptor do Produto</label>
+        <label className={labelClasses}>DESCRIÇÃO DO PRODUTO</label>
         <input
           required
           type="text"
@@ -1076,7 +1329,7 @@ function EditProductForm({
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className={labelClasses}>Valor Unitário (R$)</label>
           <input
@@ -1125,7 +1378,14 @@ function EditProductForm({
         />
       </div>
 
-      <div className="flex gap-3 mt-6">
+      <div className="flex flex-col gap-3 mt-6 sm:flex-row">
+        <button
+          type="button"
+          onClick={() => onDelete(product.id)}
+          className="flex-1 py-4 bg-red-500 text-white rounded-2xl font-black uppercase tracking-[0.2em] text-xs hover:bg-red-600 transition-all"
+        >
+          Excluir
+        </button>
         <button
           type="button"
           onClick={onCancel}

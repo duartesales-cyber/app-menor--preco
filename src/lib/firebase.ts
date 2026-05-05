@@ -1,20 +1,29 @@
+/// <reference types="vite/client" />
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
+import { getStorage, ref, uploadString, getDownloadURL } from 'firebase/storage';
 
 const firebaseConfig = {
-  apiKey: "AIzaSyBPkJn9e9f7FpQGE-cSGHRIb65R-OsVar0",
-  authDomain: "menor-preco-54ef2.firebaseapp.com",
-  projectId: "menor-preco-54ef2",
-  storageBucket: "menor-preco-54ef2.firebasestorage.app",
-  messagingSenderId: "609779296065",
-  appId: "1:609779296065:web:bb92b8eeb9b9821deb63c0"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, "ai-studio-27b6107f-2829-403e-aeb7-5db74262e7b5");
+export const db = getFirestore(app, import.meta.env.VITE_FIREBASE_DATABASE_ID);
 export const auth = getAuth(app);
+export const storage = getStorage(app);
 export const googleProvider = new GoogleAuthProvider();
+
+export const uploadProductImage = async (imageDataUrl: string, fileName: string) => {
+  const imageRef = ref(storage, `product-images/${fileName}`);
+  await uploadString(imageRef, imageDataUrl, 'data_url');
+  return await getDownloadURL(imageRef);
+};
 
 export const signInWithGoogle = async () => {
   try {
