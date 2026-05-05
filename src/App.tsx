@@ -40,7 +40,7 @@ import {
   where
 } from 'firebase/firestore';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
-import { db, auth, signInWithGoogle, uploadProductImage } from './lib/firebase';
+import { db, auth, signInWithGoogle } from './lib/firebase';
 import { handleFirestoreError, OperationType } from './lib/firestore-errors';
 
 // --- Types ---.
@@ -190,16 +190,21 @@ const filteredProducts = useMemo(() => {
 
     let imageUrl: string | undefined;
     if (cameraPhotoData) {
-      try {
-        imageUrl = await uploadProductImage(
-          cameraPhotoData,
-          `product-${user.uid}-${Date.now()}.jpg`
-        );
-      } catch (uploadError) {
-        console.error('Erro no upload da imagem, salvando sem foto:', uploadError);
-        imageUrl = undefined;
-      }
-    }
+  try {
+    const formData = new FormData();
+    formData.append('file', cameraPhotoData);
+    formData.append('upload_preset', import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET);
+    const res = await fetch(
+      `https://api.cloudinary.com/v1_1/${import.meta.env.VITE_CLOUDINARY_CLOUD_NAME}/image/upload`,
+      { method: 'POST', body: formData }
+    );
+    const data = await res.json();
+    imageUrl = data.secure_url;
+  } catch (uploadError) {
+    console.error('Erro no upload Cloudinary, salvando sem foto:', uploadError);
+    imageUrl = undefined;
+  }
+} 
 
     try {
       await addDoc(collection(db, 'products'), {
