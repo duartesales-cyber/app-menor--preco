@@ -7,20 +7,25 @@
   
   --color-brand-primary: #2ecc71;
   --color-brand-dark: #27ae60;
+  
   --color-bg-dark: #0a0c10;
   --color-bg-card: #161b22;
+  
   --color-border-dim: #30363d;
+  
   --color-text-main: #e0e6ed;
   --color-text-muted: #64748b;
 }
 
 @layer base {
   body {
-    @apply bg-bg-dark text-text-main;
+    @apply bg-bg-dark text-text-main antialiased;
+    font-family: var(--font-sans);
   }
 }
 
 .radial-dots {
   background-image: radial-gradient(var(--color-brand-primary) 0.5px, transparent 0.5px);
   background-size: 24px 24px;
+  background-repeat: repeat;
 }
